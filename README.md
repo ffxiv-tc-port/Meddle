@@ -1,65 +1,49 @@
 # Meddle
-<a href="https://ko-fi.com/ramen_au"><img alt="Sponsor Badge" src="https://img.shields.io/badge/Meddle-Sponsor-pink?style=flat"></a>
-<a href="https://github.com/PassiveModding/Meddle/"><img alt="Meddle" src="https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fraw.githubusercontent.com%2FPassiveModding%2FMeddle%2Frefs%2Fheads%2Fmain%2Frepo.json&query=%24.%5B0%5D.AssemblyVersion&label=Meddle"></a>
-<a href="https://github.com/PassiveModding/MeddleTools/releases"><img alt="MeddleTools" src="https://img.shields.io/badge/dynamic/toml?url=https%3A%2F%2Fraw.githubusercontent.com%2FPassiveModding%2FMeddleTools%2Frefs%2Fheads%2Fmain%2FMeddleTools%2Fblender_manifest.toml&query=%24.version&label=MeddleTools"></a>
 
-This project is a Dalamud plugin which provides a GUI for exporting player models from FFXIV.
+[PassiveModding/Meddle](https://github.com/PassiveModding/Meddle) 的台服移植版。
+匯出遊戲內角色模型與場景為 glTF 的插件，搭配 [MeddleTools](https://github.com/PassiveModding/MeddleTools) Blender 附加元件使用。
 
-- [Installation](#installation)
-- [Releases](https://github.com/PassiveModding/Meddle/releases)
-- [MeddleTools Blender Addon](https://github.com/PassiveModding/MeddleTools)
-- [Attributions](#attributions)
+> 若只是要匯出單一模型部件或製作模組，請改用 Penumbra。Meddle 適合一次匯出整組角色或整個場景。
 
-> NOTE: For single mesh export and mod creation, use Penumbra. 
-> This plugin is intended for exporting multiple meshes at once, such as for a full character model or an environment.
+## 主要功能
 
-## Installation
-Meddle is written as a Dalamud plugin and as such, requires that you use FFXIVQuickLauncher to start your game.
-This will enable you to install community-created plugins.
+- **角色分頁**：匯出玩家或 NPC 的完整角色模型，含裝備、外觀與骨骼資料。
+- **場景分頁**：搭配世界疊加層挑選場景物件，匯出環境／地形物件。
+- **動作分頁**：匯出角色骨骼動畫。
+- **材質參數分頁**：檢視與調整材質參數。
+- **偵錯／地形偵錯分頁**：開發除錯用資訊。
+- **設定分頁**：匯出格式與行為設定。
 
-1. Type the `/xlsettings` command into your chatbox. This will open your Dalamud Settings.
-2. In the window that opens, navigate to the "Experimental" tab. Scroll down to "Custom Plugin Repositories".
-3. Copy and paste the repo URL (seen below) into the input box, making sure to press the "+" button to add it.
-4. Press the "Save and Close" button. This will add Meddle to Dalamud's list of available plugins.
-5. Open the plugin installer by typing the `/xlplugins` command, search for Meddle, and click install.
+指令 `/meddle` 開啟模型匯出視窗。
 
-Repo URL
+## 台服版的修改
 
-```
-https://raw.githubusercontent.com/PassiveModding/Meddle/main/repo.json
-```
+- 場景分頁的世界疊加層預設關閉（既有設定檔也會關掉一次，之後自己打開不會再被動到）
+- 場景解析預設不包含光源（Light）、環境光（EnvLighting）與貼花（Decal）——這幾類要走未經台服驗證的記憶體偏移；需要時可自己勾選
+- 場景分頁的「場景資料（進階）」預設收起；場景解析加上節流，連續失敗多次就停用（重新載入插件才恢復）
+- 記憶體寫入分頁預設隱藏，偵錯分頁的部分區塊預設收起
+- 角色選取改成每幀依 ID 重查，不再跨幀持有遊戲物件
+- 介面繁體中文化（插件資訊、分頁名稱與匯出按鈕）
 
-## Attributions
-Much of this code is from or based on the following projects and wouldn't have been possible without them:
-- [Xande](https://github.com/xivdev/Xande) [[GNU AGPL v3](https://github.com/xivdev/Xande/blob/main/LICENSE)]
-  - PBD file structure
-  - MeshBuilder
-  - RaceDeformer
-  - Havok Skeletons
-- [Penumbra](https://github.com/xivdev/Penumbra) 
-  - shader comp logic
-  - vertex type info
-  - SpanBinaryReader
-- [Lumina](https://github.com/NotAdam/Lumina/)
-  - file structures
-- [SaintCoinach](https://github.com/xivapi/SaintCoinach)
-  - terrain and level file structures
-- [Alpha](https://github.com/NotNite/Alpha) [[MIT](https://github.com/NotNite/Alpha/blob/main/LICENSE)]
-  - initial reference for Meddle.UI project setup and draw logic 
-- [PathFinder](https://github.com/chirpxiv/ffxiv-pathfinder) [[MIT](https://github.com/chirpxiv/ffxiv-pathfinder/blob/main/LICENSE)]
-  - 🐇
-  - reference for world overlay logic
-- [Ktisis](https://github.com/ktisis-tools/Ktisis) [[GNU GPL v3](https://github.com/ktisis-tools/Ktisis/blob/main/LICENSE)]
-  - lighting structs
-  - hkQsTransformf matrix handling
+## 安裝
 
-Important contributors:
-- [WorkingRobot](https://github.com/WorkingRobot) 
-  - GPU texture exports 
-  - Character-tree structure for exports
-  - Shape and attribute data
-  - Attach structs
-  - Skeleton Parsing
-- Members of the Penumbra discord
-  - Testing and feedback
+在 Dalamud 設定的「自訂插件庫」加入
+`https://raw.githubusercontent.com/ffxiv-tc-port/DalamudPluginsTC/main/repo.json` 並啟用，
+再從插件列表安裝。
 
+## 出處與致謝
+
+本專案大量參考或使用以下專案的成果：
+- [Xande](https://github.com/xivdev/Xande)：PBD 檔案結構、MeshBuilder、RaceDeformer、Havok 骨骼
+- [Penumbra](https://github.com/xivdev/Penumbra)：shader 編譯邏輯、頂點格式資訊、SpanBinaryReader
+- [Lumina](https://github.com/NotAdam/Lumina/)：檔案結構
+- [SaintCoinach](https://github.com/xivapi/SaintCoinach)：地形與關卡檔案結構
+- [Alpha](https://github.com/NotNite/Alpha)：Meddle.UI 專案架構與繪製邏輯參考
+- [PathFinder](https://github.com/chirpxiv/ffxiv-pathfinder)：世界疊加層邏輯參考
+- [Ktisis](https://github.com/ktisis-tools/Ktisis)：燈光結構、hkQsTransformf 矩陣處理
+
+主要貢獻者：
+- [WorkingRobot](https://github.com/WorkingRobot)：GPU 貼圖匯出、角色樹狀匯出結構、Shape／屬性資料、Attach 結構、骨骼解析
+- Penumbra Discord 社群成員：測試與回饋
+
+原作者：[PassiveModding](https://github.com/PassiveModding)

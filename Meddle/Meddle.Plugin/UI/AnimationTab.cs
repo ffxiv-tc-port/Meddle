@@ -55,14 +55,15 @@ public class AnimationTab : ITab
         this.framework.Update += OnFrameworkUpdate;
     }
 
-    public string Name => "Animation";
+    public string Name => "動作";
     public int Order => (int) WindowOrder.Animation;
 
-    private List<ICharacter> selectedCharacters = [];
+    // 台服加固：只存 GameObjectId，不存 ICharacter（理由見 CommonUi.ResolveCharacter）。
+    private readonly List<ulong> selectedCharacterIds = [];
     
     public void Draw()
     {
-        commonUi.DrawMultiCharacterSelect(ref selectedCharacters);
+        var selectedCharacters = commonUi.DrawMultiCharacterSelect(selectedCharacterIds);
         
         if (ImGui.InputInt("Interval (ms)", ref intervalMs, 10, 100))
         {
@@ -183,7 +184,7 @@ public class AnimationTab : ITab
         }
 
         var characters = commonUi.GetCharacters()
-                                 .Where(x => selectedCharacters.Any(s => s.Address == x.Address)).ToArray();
+                                 .Where(x => selectedCharacterIds.Contains(x.GameObjectId)).ToArray();
         if (characters.Length == 0)
         {
             return;

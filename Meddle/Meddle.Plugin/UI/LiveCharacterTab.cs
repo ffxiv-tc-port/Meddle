@@ -61,7 +61,8 @@ public unsafe class LiveCharacterTab : ITab
     private Task exportTask = Task.CompletedTask;
     private CancellationTokenSource cancelToken = new();
 
-    private ICharacter? selectedCharacter;
+    // 台服加固：只存 GameObjectId，不存 ICharacter（理由見 CommonUi.ResolveCharacter）。
+    private ulong selectedCharacterId;
     private ProgressWrapper? progress;
     private bool requestedPopup;
     private Action? drawExportSettingsCallback;
@@ -98,13 +99,13 @@ public unsafe class LiveCharacterTab : ITab
 
     private bool IsDisposed { get; set; }
 
-    public string Name => "Character";
+    public string Name => "角色";
     public int Order => (int)WindowOrder.Character;
 
     public void Draw()
     {
         UiUtil.DrawProgress(exportTask, progress, cancelToken);
-        commonUi.DrawCharacterSelect(ref selectedCharacter, ObjectUtil.ValidationFlags.IsVisible);
+        var selectedCharacter = commonUi.DrawCharacterSelect(ref selectedCharacterId, ObjectUtil.ValidationFlags.IsVisible);
         if (selectedCharacter != null)
         {
             var charPtr = (CSCharacter*)selectedCharacter.Address;
@@ -173,7 +174,7 @@ public unsafe class LiveCharacterTab : ITab
             //humanData = resolverService.ParseHuman(cBase);
             var humanData = ParseMaterialUtil.ParseHuman(cBase);
             DrawHumanCharacter(humanData);
-            ExportButton("Export All Models With Attaches", () =>
+            ExportButton("匯出全部模型（含附加物）", () =>
             {
                 var info = resolverService.ParseCharacter(character);
                 if (info == null)
@@ -282,7 +283,7 @@ public unsafe class LiveCharacterTab : ITab
                 config.Save();
             }
 
-            if (ImGui.Button("Export"))
+            if (ImGui.Button("匯出"))
             {
                 name = name.SanitizeFileName();
                 var defaultName = $"Character-{name}-{DateTime.Now:yyyy-MM-dd-HH-mm-ss}";
@@ -345,7 +346,7 @@ public unsafe class LiveCharacterTab : ITab
         using var drawObjectId = ImRaii.PushId($"{(nint)drawObject}");
         var cBase = (CSCharacterBase*)drawObject;
 
-        ExportButton("Export All Models", () =>
+        ExportButton("匯出全部模型", () =>
         {
             var info = resolverService.ParseDrawObject((DrawObject*)cBase);
             if (info == null)
@@ -364,7 +365,7 @@ public unsafe class LiveCharacterTab : ITab
         }).ToArray();
         using (ImRaii.Disabled(currentSelectedModels.Length == 0))
         {
-            var label = $"Export Selected Models ({currentSelectedModels.Length})";
+            var label = $"匯出所選模型（{currentSelectedModels.Length}）";
             ExportButton(label, () =>
             {
                 var info = resolverService.ParseDrawObject((DrawObject*)cBase);
@@ -482,7 +483,8 @@ public unsafe class LiveCharacterTab : ITab
                 // Note; since character materials are stored in model->Materials instead of model->ModelResourceHandle->Materials, 
                 if (ImGui.MenuItem("Open Material Window"))
                 {
-                    mdlMaterialWindowManager.AddMaterialWindow(model);
+                    // 台服加固：視窗只保存識別（繪製物件位址＋models 索引），每幀從物件表重查。
+                    mdlMaterialWindowManager.AddCharacterMaterialWindow(cPtr, mPtr);
                 }
             }
 

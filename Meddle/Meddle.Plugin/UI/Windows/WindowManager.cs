@@ -101,7 +101,7 @@ public class WindowManager : IHostedService, IDisposable
 
         commandManager.AddHandler(Command, new CommandInfo(OnCommand)
         {
-            HelpMessage = "Open the menu"
+            HelpMessage = "開啟 Meddle 模型匯出視窗"
         });
 
         return Task.CompletedTask;

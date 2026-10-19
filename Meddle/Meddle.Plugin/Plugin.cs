@@ -39,7 +39,7 @@ public sealed class Plugin : IDalamudPlugin
             
             var config = pluginInterface.GetPluginConfig() as Configuration ?? new Configuration();
             pluginInterface.Inject(config);
-            config.Migrate();
+            config.Migrate(pluginLog);
             
             Alloc.Init();
 

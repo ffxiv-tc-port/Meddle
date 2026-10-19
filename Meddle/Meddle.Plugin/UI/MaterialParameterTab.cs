@@ -43,9 +43,16 @@ public class MaterialParameterTab : ITab
         this.pack = pack;
     }
 
-    private ICharacter? selectedCharacter;
-    public string Name => "Material Parameters";
+    // 台服加固：只存 GameObjectId，不存 ICharacter（理由見 CommonUi.ResolveCharacter）。
+    private ulong selectedCharacterId;
+    public string Name => "材質參數";
     public int Order => 3;
+
+    /// <summary>
+    ///     台服加固：這個分頁會把值直接寫回遊戲的 CustomizeParameter／材質常數緩衝區，
+    ///     台服版預設隱藏，要在「設定」分頁自己打開。
+    /// </summary>
+    public bool Enabled => config.ShowAdvancedMemoryEditing;
 
     public void Dispose()
     {
@@ -56,10 +63,18 @@ public class MaterialParameterTab : ITab
 
     public void Draw()
     {
-        ImGui.TextColored(new Vector4(1, 0, 0, 1),
-                          "Warning: This tab is for advanced users only. Modifying material parameters may cause crashes or other issues.");
+        // 台服加固：正常路徑上 MeddleWindowBase 已經靠 Enabled 把分頁整個跳過，
+        // 這裡再擋一次，避免日後有人繞過分頁列直接呼叫 Draw()。
+        if (!config.ShowAdvancedMemoryEditing)
+        {
+            ImGui.TextWrapped("此分頁已在設定中停用（進階：寫入遊戲記憶體）。");
+            return;
+        }
 
-        commonUi.DrawCharacterSelect(ref selectedCharacter);
+        ImGui.TextColored(new Vector4(1, 0, 0, 1),
+                          "警告：此分頁僅供進階使用者。修改材質參數會直接寫入遊戲記憶體，上游標示可能造成崩潰或其他問題。");
+
+        var selectedCharacter = commonUi.DrawCharacterSelect(ref selectedCharacterId);
 
         if (ImGui.Button("Clear Cache"))
         {
@@ -83,7 +98,9 @@ public class MaterialParameterTab : ITab
         {
             if (human != lastHuman)
             {
-                if (lastHuman != null && lastHuman.Value != null)
+                // 台服加固：lastHuman 是上一幀存下來的原生指標，該物件可能早就不存在了。
+                // 解參用之前先確認它這一幀還掛在物件表上的某個角色底下——AVE 是 try/catch 攔不到的。
+                if (lastHuman != null && lastHuman.Value != null && commonUi.IsLiveDrawObject(lastHuman.Value))
                 {
                     // restore defaults
                     var lastParams = lastHuman.Value->CustomizeParameterCBuffer->TryGetBuffer<CustomizeParameter>();

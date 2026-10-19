@@ -20,7 +20,7 @@ public class OptionsTab : ITab
 
     public void Dispose() { }
 
-    public string Name => "Options";
+    public string Name => "設定";
     public int Order => (int) WindowOrder.Options;
 
     public void Draw()
@@ -173,6 +173,21 @@ public class OptionsTab : ITab
         {
             config.OpenFolderOnExport = openFolderOnExport;
             config.Save();
+        }
+
+        ImGui.Separator();
+
+        // 台服加固：材質參數分頁會直接寫入遊戲記憶體，台服版預設隱藏。
+        var showAdvancedMemoryEditing = config.ShowAdvancedMemoryEditing;
+        if (ImGui.Checkbox("顯示「材質參數」分頁（進階）", ref showAdvancedMemoryEditing))
+        {
+            config.ShowAdvancedMemoryEditing = showAdvancedMemoryEditing;
+            config.Save();
+        }
+
+        using (ImRaii.PushColor(ImGuiCol.Text, new Vector4(1, 0.4f, 0.4f, 1)))
+        {
+            ImGui.TextWrapped("⚠️ 此分頁會寫入遊戲記憶體，上游標示可能崩潰。匯出 NPC 模型不需要它。");
         }
     }
     

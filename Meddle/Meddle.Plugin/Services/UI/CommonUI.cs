@@ -27,6 +27,37 @@ public class CommonUi : IDisposable, IService
         this.config = config;
     }
     
+    /// <summary>
+    ///     台服加固：物件表回傳的 IGameObject 是「每個欄位預先配置、每次存取才重新指向」的共用實例
+    ///     （Dalamud ObjectTable.CachedEntry.Update()），而 IsValid() 只檢查有沒有登入。
+    ///     所以跨幀保存 ICharacter 有兩種失敗形式，兩種都不會拋例外：
+    ///     ①該欄位換了別的角色 → 靜默指到錯的人；②該欄位空了 → Update() 提早回 null、
+    ///     包裝物件留著上一次的位址 → 解參用就是 use-after-free（AccessViolationException，try/catch 攔不到）。
+    ///     ⇒ 正解是只保存 GameObjectId，每一幀重查一次。
+    /// </summary>
+    public ICharacter? ResolveCharacter(ulong gameObjectId)
+    {
+        if (gameObjectId == 0) return null;
+        return objectTable.SearchById(gameObjectId) as ICharacter;
+    }
+
+    /// <summary>
+    ///     判斷某個原生 DrawObject 指標這一幀是否還掛在物件表上的某個角色底下。
+    ///     用來取代「拿上一幀存下來的 DrawObject* 直接解參用」。
+    /// </summary>
+    public unsafe bool IsLiveDrawObject(void* drawObject)
+    {
+        if (drawObject == null) return false;
+        foreach (var obj in objectTable)
+        {
+            var native = (GameObject*)obj.Address;
+            if (native == null) continue;
+            if (native->DrawObject == drawObject) return true;
+        }
+
+        return false;
+    }
+
     public unsafe ICharacter[] GetCharacters(ObjectUtil.ValidationFlags flags = ObjectUtil.ValidationFlags.None)
     {
         if (clientState.LocalPlayer != null)
@@ -46,16 +77,20 @@ public class CommonUi : IDisposable, IService
         }
     }
 
-    public unsafe void DrawMultiCharacterSelect(ref List<ICharacter> selectedCharacters, ObjectUtil.ValidationFlags flags = ObjectUtil.ValidationFlags.None)
+    /// <summary>
+    ///     台服加固：呼叫端保存的是 GameObjectId 清單，不是 ICharacter（理由見 ResolveCharacter）。
+    ///     回傳值是「這一幀」重新解析出來的角色，用完就丟。
+    /// </summary>
+    public unsafe List<ICharacter> DrawMultiCharacterSelect(List<ulong> selectedCharacterIds, ObjectUtil.ValidationFlags flags = ObjectUtil.ValidationFlags.None)
     {
         ICharacter[] objects = GetCharacters(flags);
 
-        ImGui.Text("Select Characters");
+        ImGui.Text("選擇角色");
         var selected = new List<ICharacter>();
         var notSelected = new List<ICharacter>();
         foreach (var character in objects)
         {
-            if (selectedCharacters.Contains(character))
+            if (selectedCharacterIds.Contains(character.GameObjectId))
             {
                 selected.Add(character);
             }
@@ -73,7 +108,7 @@ public class CommonUi : IDisposable, IService
             {
                 if (ImGui.Button(FontAwesomeIcon.Times.ToIconString() + $"##RemoveChar{character.GameObjectId}"))
                 {
-                    selectedCharacters.Remove(character);
+                    selectedCharacterIds.Remove(character.GameObjectId);
                 }
             }
             ImGui.SameLine();
@@ -81,45 +116,52 @@ public class CommonUi : IDisposable, IService
             ImGui.Text(displayText);
         }
 
-        using var combo = ImRaii.Combo("##MultiCharacter", $"{selectedCharacters.Count} Selected");
+        using var combo = ImRaii.Combo("##MultiCharacter", $"已選 {selectedCharacterIds.Count} 個");
         if (combo)
         {
             foreach (var character in notSelected)
             {
                 var displayText = GetCharacterDisplayText(character, false, true);
-                var contains = selectedCharacters.Contains(character);
+                var contains = selectedCharacterIds.Contains(character.GameObjectId);
                 using var col = ImRaii.PushColor(ImGuiCol.Text, contains ? ImGuiColors.DalamudYellow : ImGuiColors.DalamudWhite);
                 if (ImGui.Selectable(displayText, contains, ImGuiSelectableFlags.DontClosePopups))
                 {
                     if (contains)
                     {
-                        selectedCharacters.Remove(character);
+                        selectedCharacterIds.Remove(character.GameObjectId);
                     }
                     else
                     {
-                        selectedCharacters.Add(character);
+                        selectedCharacterIds.Add(character.GameObjectId);
                     }
                 }
             }
         }
         
-        // remove entries which cannot be found in the object table
-        foreach (var character in selectedCharacters.ToArray())
+        // 台服加固：只留這一幀還能在物件表裡解析出來的 id
+        foreach (var id in selectedCharacterIds.ToArray())
         {
-            if (!character.IsValidCharacterBase())
+            if (ResolveCharacter(id) is not { } live || !live.IsValidCharacterBase())
             {
-                selectedCharacters.Remove(character);
+                selectedCharacterIds.Remove(id);
             }
         }
+
+        return selected;
     }
 
-    public unsafe void DrawCharacterSelect(ref ICharacter? selectedCharacter, ObjectUtil.ValidationFlags flags = ObjectUtil.ValidationFlags.None)
+    /// <summary>
+    ///     台服加固：呼叫端保存的是 GameObjectId，不是 ICharacter（理由見 ResolveCharacter）。
+    ///     回傳值是「這一幀」重新解析出來的角色，用完就丟、不要存成欄位。
+    /// </summary>
+    public unsafe ICharacter? DrawCharacterSelect(ref ulong selectedCharacterId, ObjectUtil.ValidationFlags flags = ObjectUtil.ValidationFlags.None)
     {
         ICharacter[] objects = GetCharacters(flags);
 
+        var selectedCharacter = ResolveCharacter(selectedCharacterId);
         selectedCharacter ??= objects.FirstOrDefault() ?? clientState.LocalPlayer;
 
-        ImGui.Text("Select Character");
+        ImGui.Text("選擇角色");
         if (selectedCharacter?.IsValid() == false && clientState.LocalPlayer != null)
         {
             selectedCharacter = null;
@@ -188,6 +230,9 @@ public class CommonUi : IDisposable, IService
                 }
             }
         }
+
+        selectedCharacterId = selectedCharacter?.GameObjectId ?? 0;
+        return selectedCharacter;
     }
     
     public unsafe string GetCharacterDisplayText(IGameObject obj, bool includeDistance, bool includeId)

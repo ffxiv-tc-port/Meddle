@@ -8,44 +8,35 @@ using Dalamud.Bindings.ImGui;
 using Meddle.Plugin.Models;
 using Meddle.Plugin.Utils;
 using Meddle.Utils.Constants;
+using Microsoft.Extensions.Logging;
 
 namespace Meddle.Plugin.UI.Windows;
 
 public class MdlMaterialWindow : Window
 {
+    private readonly ILogger log;
+    private readonly MdlMaterialSource source;
     private readonly MdlMaterialWindowManager windowManager;
-    private readonly Pointer<ModelResourceHandle> model;
-    private readonly Pointer<Model> model1;
+    private bool reportedRelease;
     public readonly string Id;
 
-    public unsafe MdlMaterialWindow(MdlMaterialWindowManager windowManager, Pointer<ModelResourceHandle> model) :
+    // 台服加固：不再把 Model* / ModelResourceHandle* 存成欄位。
+    // 視窗只保存 source（識別資訊），每一幀重新解析一次；解析不到就自己關掉。
+    // 理由見 MdlMaterialSource 的註解——跨幀解參已釋放的原生記憶體是 AVE，try/catch 攔不到。
+    public MdlMaterialWindow(MdlMaterialWindowManager windowManager, ILogger log, MdlMaterialSource source) :
         base("Material Editor")
     {
         this.windowManager = windowManager;
-        this.model = model;
-        Id = $"{(nint)this.model.Value:X8}";
-        WindowName = $"Material Editor {model.Value->FileName.ParseString()}###{Id}";
+        this.log = log;
+        this.source = source;
+        Id = source.Key;
+        WindowName = $"Material Editor {source.DisplayName}###{Id}";
         SizeConstraints = new WindowSizeConstraints
         {
             MinimumSize = new Vector2(375, 350),
             MaximumSize = new Vector2(1200, 1000)
         };
     }
-
-    public unsafe MdlMaterialWindow(MdlMaterialWindowManager windowManager, Pointer<Model> model) :
-        base("Material Editor")
-    {
-        this.windowManager = windowManager;
-        this.model1 = model;
-        Id = $"{(nint)model1.Value:X8}";
-        WindowName = $"Material Editor {model.Value->ModelResourceHandle->FileName.ParseString()}###{Id}";
-        SizeConstraints = new WindowSizeConstraints
-        {
-            MinimumSize = new Vector2(375, 350),
-            MaximumSize = new Vector2(1200, 1000)
-        };
-    }
-
 
     public override void OnClose()
     {
@@ -53,15 +44,31 @@ public class MdlMaterialWindow : Window
         base.OnClose();
     }
 
-    public override void Draw()
+    public override unsafe void Draw()
     {
-        if (model1 != null)
+        var resolved = source.Resolve();
+        if (resolved == 0)
         {
-            DrawModel(model1);
+            if (!reportedRelease)
+            {
+                reportedRelease = true;
+                // 要使用者回報的診斷。
+                log.LogInformation("模型已釋放，視窗自動關閉：{Model}", source.DisplayName);
+            }
+
+            ImGui.TextColored(new Vector4(1, 0, 0, 1), "模型已釋放，視窗自動關閉。");
+            IsOpen = false;
+            return;
         }
-        else
+
+        switch (source.Kind)
         {
-            DrawModel(model);
+            case MdlMaterialSourceKind.Model:
+                DrawModel((Model*)resolved);
+                break;
+            case MdlMaterialSourceKind.ModelResourceHandle:
+                DrawModel((ModelResourceHandle*)resolved);
+                break;
         }
     }
     private unsafe void DrawModel(Pointer<Model> modelPtr)

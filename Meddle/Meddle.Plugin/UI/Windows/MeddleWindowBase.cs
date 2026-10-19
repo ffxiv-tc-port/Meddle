@@ -32,6 +32,9 @@ public abstract class MeddleWindowBase : Window
         using var tabBar = ImRaii.TabBar($"##{WindowName}tabs", ImGuiTabBarFlags.Reorderable);
         foreach (var tab in GetTabs())
         {
+            // 台服加固：被停用的分頁連標籤都不畫（例如「材質參數」在設定裡沒打開時）。
+            if (!tab.Enabled) continue;
+
             using var tabItem = ImRaii.TabItem(tab.Name);
             try
             {

@@ -1,134 +1,99 @@
 name: Release
 
-# Add a concurrency group incase a tag is created, deleted, and then recreated while a release is in progress.
-concurrency:
-    group: ${{ github.workflow }}-${{ github.ref }}
-    cancel-in-progress: true
-
-# Only run this workflow when a tag is pushed when the tag starts with "v".
 on:
-    push:
-        tags:
-            - "v*"
-
-# So we can use the GitHub API to create releases with the run token.
+  workflow_dispatch:
 permissions:
-    contents: write
-
+  contents: write
 jobs:
-    Release:
-      runs-on: ubuntu-latest
-      defaults:
-          run:
-              working-directory: Meddle/Meddle.Plugin/
-              shell: bash
-      env:
-          DALAMUD_HOME: /tmp/dalamud
-          IsCI: true
-      steps:
-          - name: Checkout Repository
-            uses: actions/checkout@v4
-            with:
-                submodules: true # Grab any submodules that may be required
+  build:
+    runs-on: [self-hosted, Windows, X64]
+    steps:
+      - name: 取 App token（runner 本機私鑰，private 子模組 checkout 用）
+        id: app
+        shell: pwsh
+        run: |
+          $keyPath = 'D:\ffxiv-tc-port\tctoolbox-app.pem'
+          if (-not (Test-Path -LiteralPath $keyPath)) { throw "App private key not found on this runner: $keyPath" }
+          function B64Url([byte[]]$b) { [Convert]::ToBase64String($b).TrimEnd('=').Replace('+', '-').Replace('/', '_') }
+          $now = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
+          $hdr = B64Url ([Text.Encoding]::UTF8.GetBytes('{"alg":"RS256","typ":"JWT"}'))
+          $pl = B64Url ([Text.Encoding]::UTF8.GetBytes('{"iat":' + ($now - 60) + ',"exp":' + ($now + 540) + ',"iss":"4448133"}'))
+          $rsa = [System.Security.Cryptography.RSA]::Create()
+          $rsa.ImportFromPem((Get-Content -LiteralPath $keyPath -Raw))
+          $sig = $rsa.SignData([Text.Encoding]::UTF8.GetBytes("$hdr.$pl"), [System.Security.Cryptography.HashAlgorithmName]::SHA256, [System.Security.Cryptography.RSASignaturePadding]::Pkcs1)
+          $h = @{ Authorization = "Bearer $hdr.$pl.$(B64Url $sig)"; Accept = 'application/vnd.github+json'; 'X-GitHub-Api-Version' = '2022-11-28' }
+          $inst = @(Invoke-RestMethod -Headers $h -Uri 'https://api.github.com/app/installations') | Where-Object { $_.account.login -eq 'ffxiv-tc-port' }
+          if (-not $inst) { throw 'App 4448133 has no installation on org ffxiv-tc-port' }
+          $tok = (Invoke-RestMethod -Method Post -Headers $h -Uri "https://api.github.com/app/installations/$($inst[0].id)/access_tokens").token
+          if (-not $tok) { throw 'installation access token is empty' }
+          Write-Host "::add-mask::$tok"
+          "token=$tok" >> $env:GITHUB_OUTPUT
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          token: ${{ steps.app.outputs.token }}
+      - name: Install .NET
+        uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: |
+            9.x
+            10.x
+        env:
+          DOTNET_INSTALL_DIR: ${{ runner.tool_cache }}/dotnet
+      - name: Download Dalamud (pinned TC-compatible build)
+        shell: pwsh
+        run: |
+          $pin = 'D:\ffxiv-tc-port\dalamud-pins\dalamud-pin-v13.0.0.17\dalamud-api13-net9.zip'
+          if (-not (Test-Path -LiteralPath $pin)) { throw "pinned Dalamud not found on this runner: $pin" }
+          Copy-Item -LiteralPath $pin -Destination dalamud-pinned.zip
+          Expand-Archive -Force dalamud-pinned.zip "$env:RUNNER_TEMP\dalamud-pinned\"
+      - name: Compute version
+        shell: pwsh
+        run: |
+          $ver = "${{ github.ref_name }}" -replace '^v'
+          "VER=$ver" | Out-File -FilePath $env:GITHUB_ENV -Append
+      - name: Build with dotnet
+        run: dotnet build --configuration Release Meddle/Meddle.Plugin/Meddle.Plugin.csproj -p:DalamudLibPath="$env:RUNNER_TEMP\dalamud-pinned\" -p:Version=${{ env.VER }} -p:AssemblyVersion=${{ env.VER }} -p:FileVersion=${{ env.VER }}
+      - name: write version into manifest
+        shell: pwsh
+        run: |
+          $path = './Meddle/Meddle.Plugin/bin/Release/Meddle.Plugin/Meddle.Plugin.json'
+          $json = Get-Content -Raw $path | ConvertFrom-Json
+          $json.AssemblyVersion = "${{ env.VER }}"
+          $json | ConvertTo-Json | Set-Content -Path $path
+      - name: 瘦身並打包成 Meddle.Plugin.zip
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $pkg = Join-Path $env:RUNNER_TEMP 'Meddle.Plugin-package'
+          if (Test-Path -LiteralPath $pkg) { Remove-Item -Recurse -Force -LiteralPath $pkg }
+          Expand-Archive -Force -Path 'Meddle/Meddle.Plugin/bin/Release/Meddle.Plugin/latest.zip' -DestinationPath $pkg
 
-          - name: Setup .NET
-            uses: actions/setup-dotnet@v4
-            with:
-                dotnet-version: 9.0.x
+          # SkiaSharp 等套件的 nuget 包把所有平台的原生函式庫一起帶進輸出目錄，
+          # 但這支外掛只在 Windows x64 的 Dalamud 上執行，其他平台的原生檔用不到。
+          # 只留 win／win-x64（win 是與架構無關、受管理的 RID 專屬組件會用到的資料夾，
+          # 沒有就跳過；不點名其他資料夾一律刪，避免漏掉某個平台變體）。
+          $runtimesDir = Join-Path $pkg 'runtimes'
+          if (Test-Path -LiteralPath $runtimesDir) {
+              Get-ChildItem -LiteralPath $runtimesDir -Directory |
+                  Where-Object { $_.Name -notin @('win', 'win-x64') } |
+                  Remove-Item -Recurse -Force
+          }
 
-          - name: Extract version and custom path
-            run: |
-                tag=${{ github.ref_name }}
-                
-                # Check if tag matches custom branch pattern (v{version}_{custom_path})
-                if [[ $tag =~ ^v(.+)_(.+)$ ]]; then
-                    version="${BASH_REMATCH[1]}"
-                    download_path="${BASH_REMATCH[2]}"
-                # Check if tag matches the default pattern (v{version})
-                elif [[ $tag =~ ^v(.+)$ ]]; then
-                    version="${BASH_REMATCH[1]}"
-                    download_path=""
-                else
-                    echo "Tag format not recognized"
-                    exit 1
-                fi
-                
-                echo "VERSION=$version" >> $GITHUB_ENV
-                echo "DOWNLOAD_PATH=$download_path" >> $GITHUB_ENV
-                echo "Download Path: $download_path"
-                echo "Version: $version"
-  
-          - name: Download Dalamud Library
-            run: |
-                download_url="https://goatcorp.github.io/dalamud-distrib"
-                if [ ! -z "${{ env.DOWNLOAD_PATH }}" ]; then
-                    download_url="$download_url/${{ env.DOWNLOAD_PATH }}"
-                fi
-                download_url="$download_url/latest.zip"
-                echo "Downloading from: $download_url"
-                wget $download_url -O /tmp/dalamud.zip
-                unzip /tmp/dalamud.zip -d /tmp/dalamud  
+          Compress-Archive -Path (Join-Path $pkg '*') -DestinationPath "$env:GITHUB_WORKSPACE/Meddle.Plugin.zip" -Force
+      - name: Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: Release ${{ github.ref_name }}
+          files: |
+            Meddle.Plugin.zip
+            Meddle/Meddle.Plugin/bin/Release/Meddle.Plugin/Meddle.Plugin.json
+          generate_release_notes: true
 
-          - name: Restore Dependencies
-            run: dotnet restore
+# 🔴 資產名一律用 InternalName——本外掛的 InternalName 是 `Meddle.Plugin`（不是 repo 名 `Meddle`），
+#    mirror 用「資產名去副檔名 == InternalName」挑，改成 Meddle.zip 會挑不到。
+# 🔴 路徑對齊本機實測的 `->` 行：Meddle/Meddle.Plugin/bin/Release/（bin/x64 不存在）。
+# ⚠️ 新 repo 的 dispatch-only workflow 要先 touch 一個 commit 才會註冊，否則 workflow_dispatch 找不到。
 
-          - name: Build plugin in release mode
-            run: |
-                echo "Building Meddle.Plugin version: ${{ env.VERSION }}"
-                dotnet build -c Release --no-restore --nologo -o ./bin/Release \
-                -p:Version=${{ env.VERSION }} \
-                -p:AssemblyVersion=${{ env.VERSION }} \
-                -p:FileVersion=${{ env.VERSION }}
-
-          - name: Generate Checksums
-            working-directory: Meddle/Meddle.Plugin/bin/Release/Meddle.Plugin
-            run: |
-                sha512sum latest.zip >> checksums.sha512
-                
-          - name: Create GitHub Release
-            uses: softprops/action-gh-release@v1
-            with:
-                files: |
-                    Meddle/Meddle.Plugin/bin/Release/Meddle.Plugin/latest.zip
-                    Meddle/Meddle.Plugin/bin/Release/Meddle.Plugin/checksums.sha512
-                prerelease: false # Releases cant be marked as prereleases as Dalamud wont be able to find them
-                append_body: true # Append the release notes to the release body
-                body_path: .github/release-notices.md # These notes are automatically added to the release body every time.
-                generate_release_notes: true # Automatically makes a release body from PRs since the last release.
-                fail_on_unmatched_files: true # If the files arent found, fail the workflow and abort the release.
-
-          - name: Upload Artifacts
-            uses: actions/upload-artifact@v4
-            with:
-                name: Release Artifacts
-                path: |
-                    Meddle/Meddle.Plugin/bin/Release/Meddle.Plugin/latest.zip
-                    Meddle/Meddle.Plugin/bin/Release/Meddle.Plugin/checksums.sha512
-
-          - name: Update repo.json
-            run: |
-                cd ../../
-
-                release_version="${{ env.VERSION }}"
-                echo "Release Version: $release_version"
-                repo_url="$(echo "${{ github.server_url }}/${{ github.repository }}" | sed 's/#/\\#/g')"
-                echo "Repo URL: $repo_url"
-                                
-                # Update the JSON file using jq
-                jq --arg release_version "$release_version" \
-                --arg repo_url "$repo_url/releases/download/${{ github.ref_name }}/latest.zip" \
-                '.[0].AssemblyVersion = $release_version |
-                .[0].TestingAssemblyVersion = $release_version |
-                .[0].DownloadLinkInstall = $repo_url |
-                .[0].DownloadLinkUpdate = $repo_url  |
-                .[0].DownloadLinkTesting = $repo_url' \
-                repo.json > tmp.json && mv tmp.json repo.json
-                
-                cat repo.json
-                
-                git add repo.json                
-                git config --local user.name "github-actions [bot]"
-                git config --local user.email "github-actions@users.noreply.github.com"
-                git commit -m "Update repo.json for ${{ github.ref_name }}"
-                
-                git push origin HEAD:main

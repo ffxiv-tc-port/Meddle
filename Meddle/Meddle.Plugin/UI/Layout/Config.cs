@@ -4,25 +4,35 @@ using Dalamud.Bindings.ImGui;
 using Meddle.Plugin.Models;
 using Meddle.Plugin.Models.Layout;
 using Meddle.Plugin.Utils;
+using Microsoft.Extensions.Logging;
 
 namespace Meddle.Plugin.UI.Layout;
 
 public partial class LayoutWindow
 {
+    // 台服加固：預設不包含 Light 與 EnvLighting。這兩類的解析要走一串 FFXIVClientStructs 沒有背書的偏移
+    // （LightLayoutInstance／Light／RenderLight、EnvManagerEx／EnvState／EnvLighting），偏移錯掉時讀到的是鄰居欄位，
+    // 垃圾值若是非 null 指標，下一次解參就是 AccessViolationException。
+    // ⚠️ 這兩個旗標同時是「解析閘門」而不只是「顯示閘門」——LayoutService.ParseInstance 會照它跳過
+    //    Light，GetWorldState 會照它跳過 EnvLighting ⇒ 拿掉就不會走那些偏移。匯出功能不受影響。
     public const ParsedInstanceType DefaultDrawTypes = ParsedInstanceType.Character |
                                                        ParsedInstanceType.Housing |
                                                        ParsedInstanceType.Terrain |
                                                        ParsedInstanceType.BgPart |
-                                                       ParsedInstanceType.Light |
                                                        ParsedInstanceType.SharedGroup |
-                                                       ParsedInstanceType.Camera |
-                                                       ParsedInstanceType.EnvLighting;
+                                                       ParsedInstanceType.Camera;
 
     public class LayoutConfig
     {
         // Overlay options
         public ParsedInstanceType DrawTypes { get; set; } = DefaultDrawTypes;
-        public bool DrawOverlay { get; set; } = true;
+
+        // 台服加固：疊加層開著時 LayoutWindow 每幀都會重新請求一次場景解析，
+        // 而那段解析途中會讀取一批未對台服驗證的結構偏移 ⇒ 台服版預設關閉。
+        // ⚠️ 改預設值只對全新安裝生效（Dalamud 的 PluginConfigurations.SerializeConfig 沒有設
+        //    DefaultValueHandling，既有使用者的 json 已經寫著 true）
+        //    ⇒ 既有使用者靠 Configuration.Migrate() 裡的一次性遷移關掉。
+        public bool DrawOverlay { get; set; }
         public bool DrawChildren { get; set; }
         public bool TraceToParent { get; set; } = true;
         public bool OrderByDistance { get; set; } = true;
@@ -60,6 +70,17 @@ public partial class LayoutWindow
             {
                 config.LayoutConfig.DrawOverlay = drawOverlay;
                 config.Save();
+                if (drawOverlay && !loggedOverlayEnable)
+                {
+                    loggedOverlayEnable = true;
+                    log.LogInformation(
+                        "已開啟場景疊加層：疊加層會讓場景解析持續重跑，途中會讀取未對台服驗證的結構偏移，若在此之後崩潰請一併回報。");
+                }
+            }
+
+            using (ImRaii.PushColor(ImGuiCol.Text, new Vector4(1, 0.4f, 0.4f, 1)))
+            {
+                ImGui.TextWrapped("⚠️ 疊加層會讓場景解析持續重跑，途中會讀取未對台服驗證的結構偏移；台服版預設關閉。");
             }
 
             var drawChildren = config.LayoutConfig.DrawChildren;

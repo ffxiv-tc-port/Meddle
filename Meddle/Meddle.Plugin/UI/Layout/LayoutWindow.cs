@@ -53,6 +53,8 @@ public partial class LayoutWindow : ITab
     private string search = "";
     private bool shouldUpdateState = true;
     private bool requestedPopup;
+    private bool loggedExpand;
+    private bool loggedOverlayEnable;
 
     public LayoutWindow(
         LayoutService layoutService,
@@ -79,7 +81,7 @@ public partial class LayoutWindow : ITab
     }
 
 
-    public string Name => "Layout";
+    public string Name => "場景";
     public int Order => (int)WindowOrder.Layout;
     public MenuType MenuType => MenuType.Default;
 
@@ -89,32 +91,24 @@ public partial class LayoutWindow : ITab
         {
             UiUtil.DrawProgress(exportTask, progress, cancelToken);
 
-            if (shouldUpdateState)
+            // 台服加固：場景解析用的結構偏移（RenderLight／EnvLighting／DecalItem／SgbFile…）
+            // 抄自對全球版寫的參考實作，沒有對台服客戶端逐欄驗過；偏移錯掉會靜默讀到別的記憶體再崩潰。
+            // ⇒ 預設收起。收起時連 LayoutService 的更新請求都不會發出，那段解析就不會跑。
+            var expanded = ImGui.CollapsingHeader("場景資料（進階）");
+            using (ImRaii.PushColor(ImGuiCol.Text, new Vector4(1, 0.4f, 0.4f, 1)))
             {
-                SetupCurrentState();
-                shouldUpdateState = false;
+                ImGui.TextWrapped(Constants.TcUnverifiedOffsetWarning);
             }
 
-            if (config.LayoutConfig.DrawOverlay)
+            if (expanded)
             {
-                shouldUpdateState = true;
-                DrawOverlayWindow(out _, out var selected);
-                foreach (var group in selected)
+                if (!loggedExpand)
                 {
-                    selectedInstances[group.Id] = group;
+                    loggedExpand = true;
+                    log.LogInformation("已展開「場景」分頁：此處的結構偏移未對台服驗證，若在此之後崩潰請一併回報。");
                 }
-            }
 
-            DrawOptions();
-
-            if (ImGui.CollapsingHeader("Selected"))
-            {
-                DrawSelected();
-            }
-
-            if (ImGui.CollapsingHeader("All"))
-            {
-                DrawAll();
+                DrawLayoutContent();
             }
 
             fileDialog.Draw();
@@ -142,6 +136,38 @@ public partial class LayoutWindow : ITab
             ImGui.TextWrapped(e.ToString());
         }
     }
+
+    private void DrawLayoutContent()
+    {
+        if (shouldUpdateState)
+        {
+            SetupCurrentState();
+            shouldUpdateState = false;
+        }
+
+        if (config.LayoutConfig.DrawOverlay)
+        {
+            shouldUpdateState = true;
+            DrawOverlayWindow(out _, out var selected);
+            foreach (var group in selected)
+            {
+                selectedInstances[group.Id] = group;
+            }
+        }
+
+        DrawOptions();
+
+        if (ImGui.CollapsingHeader("Selected"))
+        {
+            DrawSelected();
+        }
+
+        if (ImGui.CollapsingHeader("All"))
+        {
+            DrawAll();
+        }
+    }
+
     private void DrawAll()
     {
         shouldUpdateState = true;
@@ -325,12 +351,13 @@ public partial class LayoutWindow : ITab
             ImGui.SameLine();
             using (ImRaii.PushFont(UiBuilder.IconFont))
             {
-                if (ImGui.Button(FontAwesomeIcon.PaintBrush.ToIconString()))
+                if (ImGui.Button(FontAwesomeIcon.PaintBrush.ToIconString()) && bg.ModelPtr is { } modelPtr)
                 {
                     unsafe
                     {
-                        var pointer = (ModelResourceHandle*)bg.ModelPtr;
-                        mdlMaterialWindowManager.AddMaterialWindow(pointer);
+                        // 台服加固：視窗只保存識別（layout instance 位址＋handle 位址），每幀重驗。
+                        var pointer = (ModelResourceHandle*)modelPtr;
+                        mdlMaterialWindowManager.AddBgPartMaterialWindow(bg.Id, pointer);
                     }
                 }
             }

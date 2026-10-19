@@ -22,6 +22,7 @@ using Meddle.Utils.Constants;
 using Meddle.Utils.Files;
 using Meddle.Utils.Files.SqPack;
 using Meddle.Utils.Helpers;
+using Microsoft.Extensions.Logging;
 using SharpGLTF.Transforms;
 using SkiaSharp;
 
@@ -43,6 +44,7 @@ public class DebugTab : ITab
     private readonly StainProvider stainProvider;
     private readonly IDataManager dataManager;
     private readonly ComposerFactory composerFactory;
+    private readonly ILogger<DebugTab> log;
     private string boneSearch = "";
     private readonly FileDialogManager fileDialog = new()
     {
@@ -52,7 +54,8 @@ public class DebugTab : ITab
     private Task? exportTask;
     
 
-    private ICharacter? selectedCharacter;
+    // 台服加固：只存 GameObjectId，不存 ICharacter（理由見 CommonUi.ResolveCharacter）。
+    private ulong selectedCharacterId;
     private enum BoneMode
     {
         Local,
@@ -63,6 +66,10 @@ public class DebugTab : ITab
     
     private BoneMode boneModeInput = BoneMode.ModelPropagate;
 
+    // 台服加固：未驗偏移區塊「第一次展開」各寫一行 Information，之後不再重複。
+    private bool loggedEnvLightingExpand;
+    private bool loggedTerrainPointersExpand;
+
     public DebugTab(Configuration config, SigUtil sigUtil, CommonUi commonUi, 
                     IGameGui gui, IClientState clientState, 
                     LayoutService layoutService,
@@ -72,7 +79,8 @@ public class DebugTab : ITab
                     SqPack sqPack,
                     StainProvider stainProvider,
                     IDataManager dataManager,
-                    ComposerFactory composerFactory)
+                    ComposerFactory composerFactory,
+                    ILogger<DebugTab> log)
     {
         this.config = config;
         this.sigUtil = sigUtil;
@@ -88,6 +96,7 @@ public class DebugTab : ITab
         this.stainProvider = stainProvider;
         this.dataManager = dataManager;
         this.composerFactory = composerFactory;
+        this.log = log;
     }
 
     public void Dispose()
@@ -95,7 +104,7 @@ public class DebugTab : ITab
         // TODO release managed resources here
     }
 
-    public string Name => "Debug";
+    public string Name => "偵錯";
     public int Order => 0;
 
     private readonly JsonSerializerOptions jsonOptions = new()
@@ -128,8 +137,24 @@ public class DebugTab : ITab
             }
         }
 
-        if (ImGui.CollapsingHeader("EnvLighting"))
+        // 台服加固：EnvManagerEx／EnvState／EnvLighting 的偏移抄自 Ktisis 對全球版寫的宣告
+        //（出處連結在 Models/Structs/EnvManagerEx.cs），沒有對台服客戶端逐欄驗過。
+        // 偏移錯掉的失敗形式是靜默讀到別的記憶體再崩潰 ⇒ 預設收起，
+        // 收起時 ParseEnvLight() 完全不會執行（不是只把畫面藏起來）。
+        var envLightingExpanded = ImGui.CollapsingHeader("EnvLighting（進階偵錯）");
+        using (ImRaii.PushColor(ImGuiCol.Text, new Vector4(1, 0.4f, 0.4f, 1)))
         {
+            ImGui.TextWrapped(Constants.TcUnverifiedOffsetWarning);
+        }
+
+        if (envLightingExpanded)
+        {
+            if (!loggedEnvLightingExpand)
+            {
+                loggedEnvLightingExpand = true;
+                log.LogInformation("已展開「EnvLighting」偵錯區塊：EnvManagerEx／EnvState／EnvLighting 的結構偏移未對台服驗證，若在此之後崩潰請一併回報。");
+            }
+
             ParseEnvLight();
         }
 
@@ -264,8 +289,24 @@ public class DebugTab : ITab
             }
         }
 
-        if (ImGui.CollapsingHeader("Terrain Pointers"))
+        // 台服加固：這一段走的是與「地形偵錯」分頁同一張 layout 圖
+        //（LayoutWorld → ActiveLayout → Layers／Instances／Terrains），
+        // 那個分頁已經因為結構偏移未對台服驗證而預設收起 ⇒ 這裡比照辦理，
+        // 收起時 DrawTerrainPointers() 完全不會執行。
+        var terrainPointersExpanded = ImGui.CollapsingHeader("Terrain Pointers（進階偵錯）");
+        using (ImRaii.PushColor(ImGuiCol.Text, new Vector4(1, 0.4f, 0.4f, 1)))
         {
+            ImGui.TextWrapped(Constants.TcUnverifiedOffsetWarning);
+        }
+
+        if (terrainPointersExpanded)
+        {
+            if (!loggedTerrainPointersExpand)
+            {
+                loggedTerrainPointersExpand = true;
+                log.LogInformation("已展開「Terrain Pointers」偵錯區塊：此處走的 layout 結構偏移未對台服驗證，若在此之後崩潰請一併回報。");
+            }
+
             DrawTerrainPointers();
         }
         
@@ -544,7 +585,7 @@ public class DebugTab : ITab
     private unsafe void DrawSelectedCharacter()
     {
         using var indent = ImRaii.PushIndent();
-        commonUi.DrawCharacterSelect(ref selectedCharacter);
+        var selectedCharacter = commonUi.DrawCharacterSelect(ref selectedCharacterId);
         if (selectedCharacter == null)
         {
             ImGui.Text("No characters found");
@@ -844,7 +885,13 @@ public class DebugTab : ITab
         var rootTransform = new Transform(rootPos);
         var ex = (PartialSkeletonEx*)(&partialSkeleton);
         var pose = partialSkeleton.GetHavokPose(0);
-        for (var i = 0; i < ex->BoneCount; i++)
+        if (pose == null || pose->Skeleton == null) return;
+        // 台服加固：BoneCount 出自我們自己宣告的位元欄位（PartialSkeletonEx，位移 0x08、bit 5..16），
+        // 這個宣告在台服客戶端上沒有被驗證過。直接拿它當上界會越界讀 havok 陣列 ⇒ AVE（攔不到）。
+        // ⇒ 一律夾在 havok 自己回報的長度內；三個陣列都要夾，半套的邊界檢查等於沒檢查。
+        var boneLimit = Math.Min(pose->Skeleton->Bones.Length, Math.Min(pose->LocalPose.Length, pose->ModelPose.Length));
+        var boneCount = (int)Math.Min((uint)Math.Max(boneLimit, 0), ex->BoneCount);
+        for (var i = 0; i < boneCount; i++)
         {
             var bone = pose->Skeleton->Bones[i];
             if (!string.IsNullOrEmpty(boneSearch) && bone.Name.String != null && !bone.Name.String.Contains(boneSearch))

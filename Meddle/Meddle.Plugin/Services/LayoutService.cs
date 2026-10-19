@@ -48,19 +48,64 @@ public class LayoutService : IService, IDisposable
         this.framework.Update += Update;
     }
 
+    // 台服加固：場景解析途中會讀取一批未對台服驗證的結構偏移。
+    // 節流的用途是把「每個 framework tick 踩一次」降到「最快每 N 個 tick 一次」，
+    // 語意不變（請求照樣會被服務，只是晚幾幀）。
+    private const int UpdateIntervalTicks = 10;
+
+    // 連續失敗這麼多次之後停用整個場景解析。
+    // ⚠️ 這只對受管理例外有效。AccessViolationException 在 .NET Core 是 corrupted-state exception，
+    //    try/catch 完全攔不到 ⇒ 這段不是防護，它的價值只在於「不要每幀把同一個例外洗進 log」。
+    private const int MaxConsecutiveFailures = 5;
+
+    private int tickCounter = UpdateIntervalTicks;
+    private int consecutiveFailures;
+
     public bool RequestUpdate { get; set; }
     public Vector3 SearchOrigin { get; set; } = Vector3.Zero;
-    
+
     public ParsedInstance[]? LastState { get; private set; }
-    
+
+    /// <summary>連續失敗過多次後為 true；之後不再解析場景，重新載入外掛才會復原。</summary>
+    public bool ParseDisabled { get; private set; }
+
     private void Update(IFramework _)
     {
+        if (ParseDisabled)
+            return;
+
+        if (tickCounter < UpdateIntervalTicks)
+        {
+            tickCounter++;
+            return;
+        }
+
         if (RequestUpdate == false)
             return;
-        
-        var worldState = GetWorldState();
-        LastState = worldState;
-        RequestUpdate = false;
+
+        tickCounter = 0;
+
+        try
+        {
+            var worldState = GetWorldState();
+            LastState = worldState;
+            consecutiveFailures = 0;
+        }
+        catch (Exception ex)
+        {
+            consecutiveFailures++;
+            logger.LogInformation(ex, "場景解析失敗（連續第 {Count} 次）", consecutiveFailures);
+            if (consecutiveFailures >= MaxConsecutiveFailures)
+            {
+                ParseDisabled = true;
+                logger.LogInformation("場景解析連續失敗 {Count} 次，已停用場景解析；重新載入插件才會復原。",
+                                      consecutiveFailures);
+            }
+        }
+        finally
+        {
+            RequestUpdate = false;
+        }
     }
 
     public unsafe ParsedInstance[]? GetWorldState()
@@ -72,10 +117,17 @@ public class LayoutService : IService, IDisposable
         var instances = new List<ParsedInstance>();
         var objects = ParseObjects();
         var cameras = ParseCameras();
-        var envLight = ParseEnvLight(cameras.Length > 0 ? cameras[0].Transform.Translation : Vector3.Zero);
-        if (envLight != null)
+
+        // 台服加固：ParseEnvLight 走的是未經 FFXIVClientStructs 背書的
+        // EnvManagerEx +0x58 / EnvState +0x20，所以照 EnvLighting 旗標決定要不要走
+        // （Light 那條在 ParseInstance 也是照旗標跳過）。
+        if (config.LayoutConfig.DrawTypes.HasFlag(ParsedInstanceType.EnvLighting))
         {
-            instances.Add(envLight);
+            var envLight = ParseEnvLight(cameras.Length > 0 ? cameras[0].Transform.Translation : Vector3.Zero);
+            if (envLight != null)
+            {
+                instances.Add(envLight);
+            }
         }
         instances.AddRange(objects);
         instances.AddRange(cameras);

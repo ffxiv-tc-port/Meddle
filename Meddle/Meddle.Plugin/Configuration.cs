@@ -32,7 +32,24 @@ public partial class Configuration : IPluginConfiguration
     public string SecretConfig { get; set; } = string.Empty;
     public bool DisplayDebugInfo { get; set; }
     public bool OpenFolderOnExport { get; set; } = true;
-    
+
+    /// <summary>
+    ///     台服加固：「材質參數」分頁會把使用者輸入的值直接寫回遊戲的 CustomizeParameter／材質常數緩衝區，
+    ///     上游自己在該分頁頂端標示「可能造成崩潰或其他問題」。台服版預設隱藏，要用得自己在設定頁打開。
+    ///     ⚠️ 預設值只對全新安裝生效；既有使用者的設定檔已經寫入這個鍵時以檔案為準。
+    /// </summary>
+    public bool ShowAdvancedMemoryEditing { get; set; }
+
+    /// <summary>
+    ///     台服加固：一次性遷移旗標。場景疊加層（<see cref="LayoutWindow.LayoutConfig.DrawOverlay" />）
+    ///     的預設值已改為關閉，但 Dalamud 的 <c>PluginConfigurations.SerializeConfig</c> 沒有設
+    ///     <c>DefaultValueHandling</c>，既有使用者的設定檔已經寫著 <c>true</c>
+    ///     ⇒ 改預設值對他們完全無效。用這個旗標把既有使用者關掉一次，之後他們自己再打開就不會再被動到。
+    ///     ⚠️ 這是回退既有行為，所以只跑一次。
+    /// </summary>
+    public bool TcLayoutOverlayDefaultMigrated { get; set; }
+
+
     /// <summary>
     /// Used to hide names in the UI
     /// </summary>

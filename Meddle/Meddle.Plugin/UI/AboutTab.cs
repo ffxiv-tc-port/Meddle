@@ -11,7 +11,7 @@ public class AboutTab : ITab
 {
     public void Dispose() { }
 
-    public string Name => "About";
+    public string Name => "關於";
     public MenuType MenuType => MenuType.Default;
     public int Order => (int) WindowOrder.About;
 

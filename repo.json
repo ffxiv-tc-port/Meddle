@@ -1,13 +1,13 @@
 [
   {
     "Author": "Ramen",
-    "Name": "Meddle",
+    "Name": "Meddle 模型匯出",
     "InternalName": "Meddle.Plugin",
-    "Description": "Did I mention I'm a model? Export models to glTF format.",
-    "AssemblyVersion": "0.1.45",
-    "TestingAssemblyVersion": "0.1.45",
-    "RepoUrl": "https://github.com/PassiveModding/Meddle",
-    "IconUrl": "https://github.com/PassiveModding/Meddle/raw/main/icon.png",
+    "Description": "把角色、場景與動作匯出成 glTF 格式。",
+    "AssemblyVersion": "0.1.46",
+    "TestingAssemblyVersion": "0.1.46",
+    "RepoUrl": "https://github.com/ffxiv-tc-port/Meddle",
+    "IconUrl": "https://raw.githubusercontent.com/ffxiv-tc-port/Meddle/tc-7.20/icon.png",
     "ApplicableVersion": "any",
     "DalamudApiLevel": 13,
     "TestingDalamudApiLevel": 13,
@@ -15,8 +15,8 @@
       "Xande",
       "Models"
     ],
-    "DownloadLinkInstall": "https://github.com/PassiveModding/Meddle/releases/download/v0.1.45/latest.zip",
-    "DownloadLinkTesting": "https://github.com/PassiveModding/Meddle/releases/download/v0.1.45/latest.zip",
-    "DownloadLinkUpdate": "https://github.com/PassiveModding/Meddle/releases/download/v0.1.45/latest.zip"
+    "DownloadLinkInstall": "https://github.com/ffxiv-tc-port/Meddle/releases/download/v0.1.46/Meddle.Plugin.zip",
+    "DownloadLinkTesting": "https://github.com/ffxiv-tc-port/Meddle/releases/download/v0.1.46/Meddle.Plugin.zip",
+    "DownloadLinkUpdate": "https://github.com/ffxiv-tc-port/Meddle/releases/download/v0.1.46/Meddle.Plugin.zip"
   }
 ]
