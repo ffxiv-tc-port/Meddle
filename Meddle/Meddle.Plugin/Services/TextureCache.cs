@@ -22,10 +22,15 @@ public class CachedTexture : IDisposable
 
 public sealed class TextureCache : IDisposable, IService
 {
+    // GetOrAdd runs on the framework thread, the cleanup timer on the thread pool: every cache access holds cacheLock.
+    // Wrap.Dispose only enqueues a deferred release (thread-safe), so it is called outside the lock from either thread.
     private readonly Dictionary<string, CachedTexture> cache = new();
+    private readonly object cacheLock = new();
     private readonly Timer cleanupTimer;
     private readonly TimeSpan expirationTime;
     private readonly ILogger<TextureCache> logger;
+    private volatile bool disposed;
+    private int cleanupFailureLogged;
 
     public TextureCache(ILogger<TextureCache> logger)
     {
@@ -42,66 +47,118 @@ public sealed class TextureCache : IDisposable, IService
 
     public IDalamudTextureWrap GetOrAdd(string key, Func<IDalamudTextureWrap> createWrap)
     {
-        if (cache.TryGetValue(key, out var cachedTexture))
-        {
-            cachedTexture.LastAccessTime = DateTime.Now;
-            return cachedTexture.Wrap;
-        }
+        if (TryGetCached(key, out var cached))
+            return cached;
 
+        // Created outside the lock: building the bitmap is slow and must not stall the cleanup thread.
         var wrap = createWrap();
-        cache[key] = new CachedTexture(wrap);
+        Store(key, wrap);
         return wrap;
     }
-    
+
     public async Task<IDalamudTextureWrap> GetOrAddAsync(string key, Func<Task<IDalamudTextureWrap>> createWrap)
     {
-        if (cache.TryGetValue(key, out var cachedTexture))
-        {
-            cachedTexture.LastAccessTime = DateTime.Now;
-            return cachedTexture.Wrap;
-        }
+        if (TryGetCached(key, out var cached))
+            return cached;
 
         var wrap = await createWrap();
-        cache[key] = new CachedTexture(wrap);
+        Store(key, wrap);
         return wrap;
     }
 
-    private void CleanupExpiredTextures(object? state)
+    private bool TryGetCached(string key, out IDalamudTextureWrap wrap)
     {
-        var now = DateTime.Now;
-        var keysToRemove = new List<string>();
-
-        foreach (var kvp in cache)
+        lock (cacheLock)
         {
-            if (now - kvp.Value.LastAccessTime > expirationTime)
+            if (cache.TryGetValue(key, out var cachedTexture))
             {
-                keysToRemove.Add(kvp.Key);
-                logger.LogDebug("Removing expired texture: {Key}", kvp.Key);
+                cachedTexture.LastAccessTime = DateTime.Now;
+                wrap = cachedTexture.Wrap;
+                return true;
             }
         }
 
-        foreach (var key in keysToRemove)
+        wrap = null!;
+        return false;
+    }
+
+    private void Store(string key, IDalamudTextureWrap wrap)
+    {
+        CachedTexture? replaced;
+        lock (cacheLock)
         {
-            cache[key].Dispose();
-            cache.Remove(key);
+            cache.Remove(key, out replaced);
+            cache[key] = new CachedTexture(wrap);
+        }
+
+        if (replaced != null && !ReferenceEquals(replaced.Wrap, wrap))
+            replaced.Dispose();
+    }
+
+    // Timer callback on the thread pool: an escaping exception would end the game process.
+    private void CleanupExpiredTextures(object? state)
+    {
+        try
+        {
+            if (disposed)
+                return;
+
+            var now = DateTime.Now;
+            List<KeyValuePair<string, CachedTexture>>? expired = null;
+            lock (cacheLock)
+            {
+                foreach (var kvp in cache)
+                {
+                    if (now - kvp.Value.LastAccessTime > expirationTime)
+                        (expired ??= new()).Add(kvp);
+                }
+
+                if (expired != null)
+                {
+                    foreach (var kvp in expired)
+                        cache.Remove(kvp.Key);
+                }
+            }
+
+            if (expired == null)
+                return;
+
+            foreach (var kvp in expired)
+            {
+                logger.LogDebug("Removing expired texture: {Key}", kvp.Key);
+                kvp.Value.Dispose();
+            }
+        }
+        catch (Exception ex)
+        {
+            if (Interlocked.Exchange(ref cleanupFailureLogged, 1) == 0)
+                logger.LogWarning("Texture cache cleanup failed ({ExceptionType}); later failures are not logged.", ex.GetType().Name);
         }
     }
 
     private void ReleaseUnmanagedResources()
     {
-        foreach (var kvp in cache)
+        List<CachedTexture> all;
+        lock (cacheLock)
         {
-            kvp.Value.Dispose();
+            all = cache.Values.ToList();
+            cache.Clear();
+        }
+
+        foreach (var cachedTexture in all)
+        {
+            cachedTexture.Dispose();
         }
     }
 
     private void Dispose(bool disposing)
     {
-        ReleaseUnmanagedResources();
+        disposed = true;
         if (disposing)
         {
             cleanupTimer.Dispose();
         }
+        ReleaseUnmanagedResources();
     }
 
     ~TextureCache()
