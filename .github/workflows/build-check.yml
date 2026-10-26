@@ -54,3 +54,4 @@ jobs:
 #   Meddle\Meddle.Plugin\bin\Release\Meddle.Plugin.dll
 # 打包產物在 Meddle/Meddle.Plugin/bin/Release/Meddle.Plugin/{latest.zip,Meddle.Plugin.json}。
 # bin/x64/ 不存在——release.yml 的路徑要跟這裡一致，抄錯會在 write-version 步驟 Cannot find path。
+# workflow re-registration trigger 2026-10-26T18:20:19Z
