@@ -7,7 +7,7 @@
     "AssemblyVersion": "0.1.46",
     "TestingAssemblyVersion": "0.1.46",
     "RepoUrl": "https://github.com/ffxiv-tc-port/Meddle",
-    "IconUrl": "https://raw.githubusercontent.com/ffxiv-tc-port/Meddle/tc-7.20/icon.png",
+    "IconUrl": "https://raw.githubusercontent.com/ffxiv-tc-port/Meddle/tc-7.30/icon.png",
     "ApplicableVersion": "any",
     "DalamudApiLevel": 13,
     "TestingDalamudApiLevel": 13,
